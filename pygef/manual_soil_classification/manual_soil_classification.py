@@ -24,15 +24,30 @@ class ManualSoilInterpretation:
             if self.df["qc"][i] > 998 or self.df["friction_number"][i] > 998 or self.df["fs"][i] > 9.98:
                 self.lith.append(None)
             else:
-                j = self.which_lithology(self.df["friction_number"][i], self.df["qc"][i])
-                self.lith.append(self.s.classification[j].name)
+                l = self.df["elevation_respect_to_NAP"][i]
+                j = self.which_lithology(self.df["friction_number"][i], self.df["qc"][i], l)
+                if j is None:
+                    self.lith.append("undefined")
+                else:
+                    self.lith.append(self.s.classification[j].name)
 
-    def which_lithology(self, fn, qc):
+    def which_lithology_minor(self, i, fn, qc):
+        if self.s.classification[i].qc_min <= qc < self.s.classification[i].qc_max:
+            if self.s.classification[i].fn_min <= fn < self.s.classification[i].fn_max:
+                return i
+
+    def which_lithology(self, fn, qc, l):
         lithology = []
         for i in range(0, len(self.s.classification)):
-            if self.s.classification[i].qc_min <= qc < self.s.classification[i].qc_max:
-                if self.s.classification[i].fn_min <= fn < self.s.classification[i].fn_max:
-                    lithology.append(i)
+            if self.s.classification[i].level_max is None and self.s.classification[i].level_min is None:
+                t = self.which_lithology_minor(i, fn, qc)
+                if t is not None:
+                    lithology.append(t)
+            else:
+                if self.s.classification[i].level_min < l < self.s.classification[i].level_max:
+                    t = self.which_lithology_minor(i, fn, qc)
+                    if t is not None:
+                        lithology.append(t)
         if len(lithology) == 1:
             return lithology[0]
         elif len(lithology) > 1:
@@ -41,6 +56,12 @@ class ManualSoilInterpretation:
                     return i
         else:
             logging.error(f'could not determine soil type by cpt data: fn: {fn}, qc: {qc}')
+            return None
+
+    def plot_soil_classification_cpt(self, qc_max=None, random_color=False, text=True):
+        ax = self.s.plot_soil_classification_diagram(qc_max=qc_max, random_color=random_color, text=text)
+        ax.plot(self.df["qc"], self.df["friction_number"], 'bo', markersize=2)
+        return ax
 
 
 class ManualSoilClassification:
@@ -55,7 +76,7 @@ class ManualSoilClassification:
         self.overlay_other_lithology = []
 
     def define_soil_classification(self, soil_types=None):
-        if self.classification is None:
+        if soil_types is None:
             self.classification = default.default_soil_types
         else:
             self.classification = soil_types
@@ -78,7 +99,13 @@ class ManualSoilClassification:
         self.global_fn_max = max([self.classification[i].fn_max for i in range(0, len(self.classification))])
         self.global_fn_min = min([self.classification[i].fn_min for i in range(0, len(self.classification))])
 
-    def plot_soil_classification_diagram(self, qc_max=None, random_color=None):
+    def check_presence_levels(self):
+        for i in self.classification:
+            if self.classification[i].level_max is not None and self.classification[i].level_min is not None:
+                return True
+        return False
+
+    def plot_soil_classification_diagram(self, qc_max=None, random_color=None, text=True):
         if self.check_status_classification() is False:
             raise ValueError("A classification has not been selected")
         self.get_bounding_values_soil_classification()
@@ -88,6 +115,7 @@ class ManualSoilClassification:
         plt.ylabel('Conusweerstand [MPa]')
         plt.axis([self.global_fn_min, self.global_fn_max, self.global_qc_min, qc_max])
         ax = plt.gca()
+
         color = 'r'
         for i in self.classification:
             if random_color:
@@ -96,15 +124,17 @@ class ManualSoilClassification:
             y = self.classification[i].qc_min
             w = self.classification[i].fn_max - self.classification[i].fn_min
             h = self.classification[i].qc_max - self.classification[i].qc_min
+
             if self.overlay_other_lithology[i]:
                 rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='w', facecolor='w', fill=True)
                 ax.add_patch(rect)
             rect = patches.Rectangle((x, y), w, h, alpha=0.5, linewidth=1, edgecolor='black', facecolor=color, fill=True)
             ax.add_patch(rect)
-            if self.classification[i].qc_max > qc_max:
-                h = qc_max - self.classification[i].qc_min
-            rot = math.degrees(math.atan2(h, w))
-            plt.text(x+0.3*w, y+0.3*h, self.classification[i].name, rotation=rot, rotation_mode ='anchor', fontsize=6)
+            if text:
+                if self.classification[i].qc_max > qc_max:
+                    h = qc_max - self.classification[i].qc_min
+                rot = math.degrees(math.atan2(h, w))
+                plt.text(x+0.3*w, y+0.3*h, self.classification[i].name, rotation=rot, rotation_mode ='anchor', fontsize=6)
         return plt
 
     def is_soil_classification_correct(self):
